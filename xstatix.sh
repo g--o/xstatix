@@ -9,26 +9,43 @@
 
 ROUTEFILE='routes.conf'
 TPLDIR='templates/'
+SRCDIR="$TPLDIR"
 OUTDIR='out/'
 ASSETDIR='assets/'
-GENROUTES=true
 DRAFTSDIR='drafts/'
+GENROUTES=true
+VERBOSE=false
 
 # routines
 
+function logVerbose {
+	if [ "$VERBOSE" == true ]; then
+		echo "$1"
+	fi
+}
+
+function pickFromDir {
+	local selection=$(ls "$1" | fzy)
+	echo -n "${1}${selection}"
+}
+
 function showHelp {
 	echo "xStatix"
-	echo "  syntax: xstatix [-w|-d|-p|-h]"
+	echo "  syntax: xstatix [-w|-d|-p|-u|-v|-h]"
 	echo "  options:"
 	echo "    w	write"
 	echo "    d	delete"
 	echo "    p	publish"
+	echo "    u	unpublish"
+	echo "    v	verbose"
 	echo "    h	print this help"
+	echo "  default:"
+	echo "    generates default project file tree"
 	exit 0
 }
 
 function prerenderTemplate {
-	local TPLFILE="${TPLDIR}/$1"
+	local TPLFILE="${SRCDIR}/$1"
 	local TPLCONTENT="$(<$TPLFILE)"
 	local L=''
 	local INCLUDES=$(grep -Po '<!--\s*#include:.*?-->' "$TPLFILE")
@@ -36,7 +53,10 @@ function prerenderTemplate {
 	IFS=$'\n'
 	for L in $INCLUDES; do
 		local INCLFNAME=$(echo -n "$L"|grep -Po '(?<=#include:).*?(?=-->)')
+		local oldSrc="$SRCDIR"
+		SRCDIR="$TPLDIR"
 		local INCLFCONTENT="$(prerenderTemplate ${INCLFNAME})"
+		SRCDIR="$oldSrc"
 		TPLCONTENT="${TPLCONTENT//$L/$INCLFCONTENT}"
 	done
 	IFS="$OLDIFS"
@@ -71,24 +91,25 @@ function makeProjectTree {
 	fi
 
 	touch "$ROUTEFILE"
+	logVerbose "[created project tree]"
 }
 
 function loadRoutes {
-
 	if [ "$GENROUTES" == true ]; then
 		rm "$ROUTEFILE"
 		touch "$ROUTEFILE"
 
-		local list=$(ls "$TPLDIR")
+		local list=$(ls "$SRCDIR")
 		for file in $list; do	
 			name="${file%.*}"
 			if [ "$name" == "index" ]; then name=''; fi
 			echo "$file:$name/" >> "$ROUTEFILE"
 		done
+		logVerbose "[generated default routes]"
 	fi
 
 	ROUTELIST="$(<$ROUTEFILE)"
-	
+	logVerbose "[loaded routes]"
 }
 
 function generate {
@@ -110,32 +131,80 @@ function generate {
 function writeDraft {
 	loadRoutes
 
+	# template selection
 	echo "choose template"
 	local template=$(ls "$TPLDIR" | fzy)
+
+	# read name
+	echo "draft name [default: template name]"
+	read name
+	if [ -z "$name" ]; then
+		name="${template}"
+	else
+		name="${name}.html"
+	fi	
+	local dest="${DRAFTSDIR}${name}"
 	
+	# variable settings
 	# @TODO: loop
 	echo "choose variable"
-	cat "$TPLDIR/$template" | grep "<!--@" | fzy
+	local varname=$(cat "$TPLDIR/$template" | grep -Po "(?<=@).*?(?=-->)" | fzy)
 	echo "set to: "
-	read tmp
-	echo "$tmp" > "${DRAFTSDIR}${template}"
+	read varval
+
+	# write draft
+	echo "<!--#include:$template-->" > ${dest}
+	echo "<!--#set:$varname=$varval-->" >> ${dest}
+
+	# done
+	echo "draft $dest written"
+	exit 0
 }
 
-function deletePage {
-	echo "delete stub"
+function deleteDraft {
+	echo "delete draft:"
+	local dest=$(pickFromDir "${DRAFTSDIR}")
+	if [ "$dest" == "${DRAFTSDIR}" ]; then
+		exit 1
+	fi
+
+	rm "${dest}"
+	echo "deleted ${dest}"
+	exit 0
 }
 
 function publishPage {
-	echo "publish stub"
+	# template selection
+	echo "publish draft"
+	local draft=$(ls "$DRAFTSDIR" | fzy)
+	local dest="${DRAFTSDIR}${draft}"
+	SRCDIR="${DRAFTSDIR}"
+	loadRoutes
+	generate
+	exit 0
+}
+
+function unpublishPage {
+	echo "unpublish page:"
+	local dest=$(pickFromDir "${OUTDIR}")
+	if [ "$dest" == "${OUTDIR}" ]; then
+		exit 1
+	fi
+
+	rm -rf "${dest}"
+	echo "unpublished ${dest}"
+	exit 0
 }
 
 # read options
 
-while getopts ":wdph" opt; do
+while getopts ":wdpuvh" opt; do
 	case ${opt} in
 	w ) writeDraft ;;
-	d ) deletePage ;;
+	d ) deleteDraft ;;
 	p ) publishPage ;;
+	u ) unpublishPage ;;
+	v ) VERBOSE=true ;;
 	h ) showHelp ;;
 	\? ) echo "Invalid option: $OPTARG" 1>&2; exit 1 ;;
 	esac
@@ -145,6 +214,3 @@ shift $((OPTIND -1))
 # main
 
 makeProjectTree
-loadRoutes
-generate
-echo "Website saved at $OUTDIR"
