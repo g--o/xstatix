@@ -20,7 +20,7 @@ VERBOSE=false
 
 function logVerbose {
 	if [ "$VERBOSE" == true ]; then
-		echo "$1"
+		echo "[$1]"
 	fi
 }
 
@@ -31,9 +31,10 @@ function pickFromDir {
 
 function showHelp {
 	echo "xStatix"
-	echo "  syntax: xstatix [-w|-d|-p|-u|-v|-h]"
+	echo "  syntax: xstatix [-w|-e|-d|-p|-u|-v|-h]"
 	echo "  options:"
 	echo "    w	write"
+	echo "    e	edit"
 	echo "    d	delete"
 	echo "    p	publish"
 	echo "    u	unpublish"
@@ -45,39 +46,43 @@ function showHelp {
 }
 
 function prerenderTemplate {
-	local TPLFILE="${SRCDIR}/$1"
-	local TPLCONTENT="$(<$TPLFILE)"
+	local tplFile="${SRCDIR}/$1"
+	local tplContent="$(<$tplFile)"
 	local L=''
-	local INCLUDES=$(grep -Po '<!--\s*#include:.*?-->' "$TPLFILE")
+	local includes=$(grep -Po '<!--\s*#include:.*?-->' "$tplFile")
 	OLDIFS="$IFS"
 	IFS=$'\n'
-	for L in $INCLUDES; do
-		local INCLFNAME=$(echo -n "$L"|grep -Po '(?<=#include:).*?(?=-->)')
+	for L in $includes; do
+		local includedFile=$(echo -n "$L"|grep -Po '(?<=#include:).*?(?=-->)')
+		# set src to templates & render
 		local oldSrc="$SRCDIR"
 		SRCDIR="$TPLDIR"
-		local INCLFCONTENT="$(prerenderTemplate ${INCLFNAME})"
+		local INCLFCONTENT="$(prerenderTemplate ${includedFile})"
 		SRCDIR="$oldSrc"
-		TPLCONTENT="${TPLCONTENT//$L/$INCLFCONTENT}"
+		# continue (src restored)
+		tplContent="${tplContent//$L/$INCLFCONTENT}"
 	done
 	IFS="$OLDIFS"
-	echo -n "$TPLCONTENT"
+	echo -n "$tplContent"
 }
 
 function renderTemplate {
-	local TPLTEXT="$(prerenderTemplate $1)"
-	local SETS=$(echo -n "$TPLTEXT"|grep -Po '<!--#set:.*?-->')
+	local tplText="$(prerenderTemplate $1)"
+	local sets=$(echo -n "$tplText"|grep -Po '<!--#set:.*?-->')
 	local L=''
 	OLDIFS="$IFS"
 	IFS=$'\n'
-	for L in $SETS; do
-		local SET=$(echo -n "$L"|grep -Po '(?<=#set:).*?(?=-->)')
-		local SETVAR="${SET%%=*}"
-		local SETVAL="${SET#*=}"
-		TPLTEXT="${TPLTEXT//$L/}"
-		TPLTEXT="${TPLTEXT//<!--@${SETVAR}-->/${SETVAL}}"
+	for L in $sets; do
+		local set=$(echo -n "$L"|grep -Po '(?<=#set:).*?(?=-->)')
+		local setvar="${set%%=*}"
+		local setval="${set#*=}"
+
+		tplText="${tplText//$L/}"
+		tplText="${tplText//<!--@${setvar}-->/${setval}}"
+		tplText="${tplText//<!--+@${setvar}-->/${setval}<!--+@${setvar}-->}"
 	done
 	IFS="$OLDIFS"
-	echo -n "$TPLTEXT"
+	echo -n "$tplText"
 }
 
 function makeProjectTree {
@@ -87,11 +92,11 @@ function makeProjectTree {
 	rm -rf "${OUTDIR}"/*
 
 	if [[ "$ASSETDIR" ]]; then 
-		cp -rd "$ASSETDIR" "${OUTDIR}/";
+		cp -rd "$ASSETDIR" "${OUTDIR}/"
 	fi
 
 	touch "$ROUTEFILE"
-	logVerbose "[created project tree]"
+	logVerbose "created project tree"
 }
 
 function loadRoutes {
@@ -105,11 +110,11 @@ function loadRoutes {
 			if [ "$name" == "index" ]; then name=''; fi
 			echo "$file:$name/" >> "$ROUTEFILE"
 		done
-		logVerbose "[generated default routes]"
+		logVerbose "generated default routes"
 	fi
 
 	ROUTELIST="$(<$ROUTEFILE)"
-	logVerbose "[loaded routes]"
+	logVerbose "loaded routes"
 }
 
 function generate {
@@ -145,16 +150,8 @@ function writeDraft {
 	fi	
 	local dest="${DRAFTSDIR}${name}"
 	
-	# variable settings
-	# @TODO: loop
-	echo "choose variable"
-	local varname=$(cat "$TPLDIR/$template" | grep -Po "(?<=@).*?(?=-->)" | fzy)
-	echo "set to: "
-	read varval
-
 	# write draft
-	echo "<!--#include:$template-->" > ${dest}
-	echo "<!--#set:$varname=$varval-->" >> ${dest}
+	echo "<!--#include:$template-->" > "${dest}"
 
 	# done
 	echo "draft $dest written"
@@ -196,11 +193,49 @@ function unpublishPage {
 	exit 0
 }
 
+function editDraft {
+	echo "edit draft:"
+	local draft=$(ls "${DRAFTSDIR}" | fzy)
+	local dest=${DRAFTSDIR}${draft}
+	SRCDIR="$DRAFTSDIR"	
+
+	# variable settings
+	# @TODO: loop
+	echo "choose variable"
+	local choice=$(prerenderTemplate "${draft}" | grep -Po "(.?@).*?(?=-->)" | fzy)
+	local prefix="${choice:0:1}" # +/-
+	local varname="${choice:2}"
+
+	echo "$varname${prefix}= "
+	read varval
+
+	local setText="<!--#set:$varname=$varval-->"
+	
+	if [ "$prefix" == "+" ]; then
+		echo "$setText" >> ${dest}
+	elif [ "$prefix" == "-" ]; then
+		local match=$(grep "<!--#set:${varname}" ${dest})
+		if [ -z "$match" ]; then
+			echo "$setText" >> ${dest}
+		else
+			sed -i -E "s/<!--#set:${varname}=.*-->/${setText}/" ${dest}
+		fi
+	else
+		logVerblose "unknown prefix"
+	fi
+
+	vim ${dest}
+
+	echo "edit complete"
+	exit 0
+}
+
 # read options
 
-while getopts ":wdpuvh" opt; do
+while getopts ":wedpuvh" opt; do
 	case ${opt} in
 	w ) writeDraft ;;
+	e ) editDraft ;;
 	d ) deleteDraft ;;
 	p ) publishPage ;;
 	u ) unpublishPage ;;
