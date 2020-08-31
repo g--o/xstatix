@@ -8,15 +8,17 @@
 # stubs
 
 ROUTEFILE='routes.conf'
-TPLDIR='templates/'
-SRCDIR="$TPLDIR"
+BLOCKSDIR='blocks/'
+SRCDIR="$BLOCKSDIR"
 OUTDIR='out/'
 ASSETDIR='assets/'
 DRAFTSDIR='drafts/'
 GENROUTES=true
 VERBOSE=false
 
-# routines
+## routines
+
+# internal
 
 function logVerbose {
 	if [ "$VERBOSE" == true ]; then
@@ -24,79 +26,45 @@ function logVerbose {
 	fi
 }
 
-function pickFromDir {
-	local selection=$(ls "$1" | fzy)
-	echo -n "${1}${selection}"
-}
-
-function showHelp {
-	echo "xStatix"
-	echo "  syntax: xstatix [-w|-e|-d|-p|-u|-v|-h]"
-	echo "  options:"
-	echo "    w	write"
-	echo "    e	edit"
-	echo "    d	delete"
-	echo "    p	publish"
-	echo "    u	unpublish"
-	echo "    v	verbose"
-	echo "    h	print this help"
-	echo "  default:"
-	echo "    generates default project file tree"
-	exit 0
-}
-
-function prerenderTemplate {
-	local tplFile="${SRCDIR}/$1"
-	local tplContent="$(<$tplFile)"
+function prerenderBlock {
+	local blockFile="${SRCDIR}${1}"
+	local blockContent="$(<${blockFile})"
 	local L=''
-	local includes=$(grep -Po '<!--\s*#include:.*?-->' "$tplFile")
+	local includes=$(grep -Po '<!--\s*#include:.*?-->' "$blockFile")
 	OLDIFS="$IFS"
 	IFS=$'\n'
 	for L in $includes; do
-		local includedFile=$(echo -n "$L"|grep -Po '(?<=#include:).*?(?=-->)')
-		# set src to templates & render
+		local includedFileName=$(echo -n "$L"| grep -Po '(?<=#include:).*?(?=-->)')
+		local includedFile="$includedFileName.html"
+		# set src to block & render
 		local oldSrc="$SRCDIR"
-		SRCDIR="$TPLDIR"
-		local INCLFCONTENT="$(prerenderTemplate ${includedFile})"
+		SRCDIR="$BLOCKSDIR"
+		local includedContent="$(prerenderBlock ${includedFile})"
 		SRCDIR="$oldSrc"
 		# continue (src restored)
-		tplContent="${tplContent//$L/$INCLFCONTENT}"
+		blockContent="${blockContent//$L/$includedContent}"
 	done
 	IFS="$OLDIFS"
-	echo -n "$tplContent"
+	echo -n "$blockContent"
 }
 
-function renderTemplate {
-	local tplText="$(prerenderTemplate $1)"
-	local sets=$(echo -n "$tplText"|grep -Po '<!--#set:.*?-->')
+function renderBlock {
+	local blockText="$(prerenderBlock $1)"
+	local sets=$(echo -n "$blockText"|grep -Po '<!--#set:.*?-->')
 	local L=''
 	OLDIFS="$IFS"
 	IFS=$'\n'
 	for L in $sets; do
-		local set=$(echo -n "$L"|grep -Po '(?<=#set:).*?(?=-->)')
+		local set=$(echo -n "$L" | grep -Po '(?<=#set:).*?(?=-->)')
 		local setvar="${set%%=*}"
 		local setval="${set#*=}"
 
-		tplText="${tplText//$L/}"
-		tplText="${tplText//<!--@${setvar}-->/${setval}}"
-		tplText="${tplText//<!--+@${setvar}-->/${setval}<!--+@${setvar}-->}"
+		blockText="${blockText//$L/}"
+		blockText="${blockText//<!--@${setvar}-->/${setval}}"
+		blockText="${blockText//<!--+@${setvar}-->/${setval}<!--+@${setvar}-->}"
 	done
 	IFS="$OLDIFS"
-	echo -n "$tplText"
-}
-
-function makeProjectTree {
-	mkdir -p "$TPLDIR"
-	mkdir -p "$ASSETDIR"
-	mkdir -p "$DRAFTSDIR"
-	rm -rf "${OUTDIR}"/*
-
-	if [[ "$ASSETDIR" ]]; then 
-		cp -rd "$ASSETDIR" "${OUTDIR}/"
-	fi
-
-	touch "$ROUTEFILE"
-	logVerbose "created project tree"
+	echo -n "$blockText"
 }
 
 function loadRoutes {
@@ -104,8 +72,11 @@ function loadRoutes {
 		rm "$ROUTEFILE"
 		touch "$ROUTEFILE"
 
-		local list=$(ls "$SRCDIR")
-		for file in $list; do	
+		# get list
+		local list=( "${1}" )
+		[ -z "$list" ] && list=$(ls "$SRCDIR")
+
+		for file in $list; do
 			name="${file%.*}"
 			if [ "$name" == "index" ]; then name=''; fi
 			echo "$file:$name/" >> "$ROUTEFILE"
@@ -121,131 +92,173 @@ function generate {
 	OLDIFS="$IFS"
 	IFS=$'\n'
 
-	for ROUTE in $ROUTELIST; do
-		TPLNAME="${ROUTE%%:*}"
-		TPLPATH="${ROUTE#*:}"
-		if [[ "$TPLNAME" && "$TPLPATH" ]]; then
-			mkdir -p "${OUTDIR}${TPLPATH}"
-			renderTemplate "$TPLNAME" > "${OUTDIR}${TPLPATH}index.html"
+	for route in $ROUTELIST; do
+		local blockname="${route%%:*}"
+		local blockpath="${route#*:}"
+		if [[ "$blockname" && "$blockpath" ]]; then
+			mkdir -p "${OUTDIR}${blockpath}"
+			renderBlock "$blockname" > "${OUTDIR}${blockpath}index.html"
 		fi
 	done
 
 	IFS="$OLDIFS"
 }
 
-function writeDraft {
-	loadRoutes
+function insertInclude {
+	# read template
+	local template="${TEMPLATE}"
 
-	# template selection
-	echo "choose template"
-	local template=$(ls "$TPLDIR" | fzy)
+	if [ ! -z "$template" ]; then
+		if [ ! -f "${BLOCKSDIR}${template}.html" ]; then
+			echo "no such template as ${TEMPLATE}"
+			exit 1
+		fi
+		# write draft
+		echo "<!--#include:$template-->" >> ${1}
+	fi
+}
 
-	# read name
-	echo "draft name [default: template name]"
-	read name
-	if [ -z "$name" ]; then
-		name="${template}"
-	else
-		name="${name}.html"
-	fi	
-	local dest="${DRAFTSDIR}${name}"
-	
-	# write draft
-	echo "<!--#include:$template-->" > "${dest}"
+# user end
 
-	# done
-	echo "draft $dest written"
+function showHelp {
+	echo "xStatix"
+	echo "  syntax: xstatix [-s|-t|-v|-g|-h|-w|-e|-d|-p|-u]"
+	echo "  options:"
+	echo "    s	set variable"
+	echo "    t	use specified block as template"
+	echo "    v	verbose"
+	echo "    g	generate project tree"
+	echo "    h	print this help"
+	echo "    w	write"
+	echo "    e	edit"
+	echo "    d	delete"
+	echo "    p	publish"
+	echo "    u	unpublish"
+	echo "  default:"
+	echo "    generates default project file tree"
+	echo "  note:"
+	echo "    use the options in the order you want them!"
 	exit 0
 }
 
+function makeProjectTree {
+	mkdir -p "$BLOCKSDIR"
+	mkdir -p "$ASSETDIR"
+	mkdir -p "$DRAFTSDIR"
+	rm -rf "${OUTDIR}"/*
+
+	if [[ "$ASSETDIR" ]]; then 
+		cp -rd "$ASSETDIR" "${OUTDIR}/"
+	fi
+
+	touch "$ROUTEFILE"
+	logVerbose "created project tree"
+}
+
+function writeDraft {
+	loadRoutes
+
+	# read name
+	local name="${1}.html"
+	local dest="${DRAFTSDIR}${name}"
+
+	insertInclude "${dest}"
+	touch "${dest}"
+
+	# done
+	echo "draft $dest written"
+}
+
 function deleteDraft {
-	echo "delete draft:"
-	local dest=$(pickFromDir "${DRAFTSDIR}")
-	if [ "$dest" == "${DRAFTSDIR}" ]; then
+	local dest="${DRAFTSDIR}${1}"
+	if [ "$dest" == "${DRAFTSDIR}" ] || [ ! -f "${dest}.html" ]; then
 		exit 1
 	fi
 
-	rm "${dest}"
+	rm "${dest}.html"
 	echo "deleted ${dest}"
 	exit 0
 }
 
 function publishPage {
-	# template selection
-	echo "publish draft"
-	local draft=$(ls "$DRAFTSDIR" | fzy)
-	local dest="${DRAFTSDIR}${draft}"
 	SRCDIR="${DRAFTSDIR}"
+
+	#loadRoutes "${1}.html"
 	loadRoutes
 	generate
+
+	echo "published draft ${1}"
 	exit 0
 }
 
 function unpublishPage {
-	echo "unpublish page:"
-	local dest=$(pickFromDir "${OUTDIR}")
-	if [ "$dest" == "${OUTDIR}" ]; then
+	local dest=${OUTDIR}${1}.html
+	if [ "$dest" == "${OUTDIR}.html" ]; then
 		exit 1
 	fi
 
 	rm -rf "${dest}"
+
 	echo "unpublished ${dest}"
 	exit 0
 }
 
 function editDraft {
-	echo "edit draft:"
-	local draft=$(ls "${DRAFTSDIR}" | fzy)
+	local draft="${1}.html"
 	local dest=${DRAFTSDIR}${draft}
-	SRCDIR="$DRAFTSDIR"	
+	SRCDIR="$DRAFTSDIR"
+
+	# insert template block
+	insertInclude "${dest}"
 
 	# variable settings
-	# @TODO: loop
-	echo "choose variable"
-	local choice=$(prerenderTemplate "${draft}" | grep -Po "(.?@).*?(?=-->)" | fzy)
-	local prefix="${choice:0:1}" # +/-
-	local varname="${choice:2}"
+	# local choice=$(prerenderBlock "${draft}" | grep -Po "(.?@).*?(?=-->)")
+	local setline="${SETOPTION}"
+	local prefix="${setline:0:1}" # +/-
+	local rest="${setline:2}"
+	local varname="${rest%%=*}"
+	local varval="${rest#*=}"
+	local setText="<!--#set:${varname}=${varval}-->"
+	local matchRegex="<!--#set:${varname}=.*-->"
 
-	echo "$varname${prefix}= "
-	read varval
-
-	local setText="<!--#set:$varname=$varval-->"
-	
 	if [ "$prefix" == "+" ]; then
 		echo "$setText" >> ${dest}
-	elif [ "$prefix" == "-" ]; then
-		local match=$(grep "<!--#set:${varname}" ${dest})
+	elif [ "$prefix" == "=" ]; then
+		local match=$(grep "$matchRegex" ${dest})
 		if [ -z "$match" ]; then
 			echo "$setText" >> ${dest}
 		else
-			sed -i -E "s/<!--#set:${varname}=.*-->/${setText}/" ${dest}
+			sed -i -E "s/${matchRegex}/${setText}/" ${dest}
 		fi
+	elif [ "$prefix" == "-" ]; then
+		local result=$(tac ${dest} | sed "0,/${matchRegex}/{s/${matchRegex}//}" | tac)
+		echo "$result" > ${dest}
+	elif [ "$prefix" == "r" ]; then
+		sed -i -E "s/$matchRegex//" ${dest}
 	else
-		logVerblose "unknown prefix"
+		logVerbose "unknown prefix"
 	fi
-
-	vim ${dest}
 
 	echo "edit complete"
 	exit 0
 }
 
+# main
 # read options
 
-while getopts ":wedpuvh" opt; do
+while getopts ":s:t:vghw:e:d:p:u:" opt; do
 	case ${opt} in
-	w ) writeDraft ;;
-	e ) editDraft ;;
-	d ) deleteDraft ;;
-	p ) publishPage ;;
-	u ) unpublishPage ;;
+	s ) SETOPTION=${OPTARG} ;;
+	t ) TEMPLATE=${OPTARG} && logVerbose "using template ${OPTARG}" ;;
 	v ) VERBOSE=true ;;
+	g ) makeProjectTree ;;
 	h ) showHelp ;;
+	w ) writeDraft ${OPTARG} ;;
+	e ) editDraft ${OPTARG} ;;
+	d ) deleteDraft ${OPTARG} ;;
+	p ) publishPage ${OPTARG} ;;
+	u ) unpublishPage ${OPTARG} ;;
 	\? ) echo "Invalid option: $OPTARG" 1>&2; exit 1 ;;
 	esac
 done
 shift $((OPTIND -1))
-
-# main
-
-makeProjectTree
