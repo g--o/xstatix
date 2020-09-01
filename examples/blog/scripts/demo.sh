@@ -5,11 +5,11 @@ rm -rf drafts/ out/ assets/
 
 echo "====== demo ======="
 echo ">> create blog"
-./setup.sh
+./scripts/setup.sh
 echo ">> post"
-./post.sh
+./scripts/post.sh
 echo ">> publish"
-./publish.sh
+./scripts/publish.sh
 echo ">> show"
-./show.sh
+./scripts/show.sh
 echo "check your browser for result"
