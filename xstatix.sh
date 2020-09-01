@@ -8,11 +8,10 @@
 # stubs
 
 ROUTEFILE='routes.conf'
-BLOCKSDIR='blocks/'
-SRCDIR="$BLOCKSDIR"
-OUTDIR='out/'
 ASSETDIR='assets/'
 DRAFTSDIR='drafts/'
+OUTDIR='out/'
+SRCDIR="$DRAFTSDIR"
 GENROUTES=true
 VERBOSE=false
 
@@ -27,7 +26,7 @@ function logVerbose {
 }
 
 function prerenderBlock {
-	local blockFile="${SRCDIR}${1}"
+	local blockFile="${1}"
 	local blockContent="$(<${blockFile})"
 	local L=''
 	local includes=$(grep -Po '<!--\s*#include:.*?-->' "$blockFile")
@@ -35,13 +34,8 @@ function prerenderBlock {
 	IFS=$'\n'
 	for L in $includes; do
 		local includedFileName=$(echo -n "$L"| grep -Po '(?<=#include:).*?(?=-->)')
-		local includedFile="$includedFileName.html"
-		# set src to block & render
-		local oldSrc="$SRCDIR"
-		SRCDIR="$BLOCKSDIR"
+		local includedFile="$includedFileName"
 		local includedContent="$(prerenderBlock ${includedFile})"
-		SRCDIR="$oldSrc"
-		# continue (src restored)
 		blockContent="${blockContent//$L/$includedContent}"
 	done
 	IFS="$OLDIFS"
@@ -50,7 +44,7 @@ function prerenderBlock {
 
 function renderBlock {
 	local blockText="$(prerenderBlock $1)"
-	local sets=$(echo -n "$blockText"|grep -Po '<!--#set:.*?-->')
+	local sets=$(echo -n "$blockText" | grep -Po '<!--#set:.*?-->')
 	local L=''
 	OLDIFS="$IFS"
 	IFS=$'\n'
@@ -73,13 +67,16 @@ function loadRoutes {
 		touch "$ROUTEFILE"
 
 		# get list
-		local list=( "${1}" )
-		[ -z "$list" ] && list=$(ls "$SRCDIR")
+		local list=( "${1}.html" )
+		[ "${list[0]}" == ".html" ] && list=$(find ${SRCDIR}** 2>/dev/null)
 
 		for file in $list; do
-			name="${file%.*}"
-			if [ "$name" == "index" ]; then name=''; fi
-			echo "$file:$name/" >> "$ROUTEFILE"
+			if [ -f "$file" ]; then
+				name=$(basename $file)
+				name="${name%.*}"
+				if [ "$name" == "index" ]; then name=''; fi
+				echo "$file:$name/" >> "$ROUTEFILE"
+			fi
 		done
 		logVerbose "generated default routes"
 	fi
@@ -104,28 +101,90 @@ function generate {
 	IFS="$OLDIFS"
 }
 
-function insertInclude {
-	# read template
-	local template="${TEMPLATE}"
+function performAction {
+	local actionname="${1}"
+	local action="${2}"
+	local dest="${3}"
+	# parse
+	local prefix="${action:0:1}" # +/-
+	local rest="${action:2}"
+	local varname="${rest%%=*}"
+	local varval="${rest#*=}"
+	# set tokens
+	local valdelim=""
+	local valregex=""
+	local settext=""
+	local matchregex=""
 
-	if [ ! -z "$template" ]; then
-		if [ ! -f "${BLOCKSDIR}${template}.html" ]; then
-			echo "no such template as ${TEMPLATE}"
+	if [ -z "$prefix" ]; then
+		logVerbose "got empty action: $actionname"
+		return
+	fi
+
+	if [ "$actionname" == "set" ]; then
+		valdelim="="
+		
+		if [ ! -z "$varval" ] && [ "$prefix" == "-" ]; then
+			valregex="$varval"
+		else
+			valregex=".*"
+		fi
+	fi
+
+	matchregex="<!--#${actionname}:${varname}${valdelim}${valregex}-->"
+	settext="<!--#${actionname}:${rest}-->"
+
+	# apply
+	if [ "$prefix" == "+" ]; then
+		echo "$settext" >> ${dest}
+	elif [ "$prefix" == "=" ]; then
+		local match=$(grep "$matchregex" ${dest})
+		if [ -z "$match" ]; then
+			echo "$settext" >> ${dest}
+		else
+			sed -i -E "s/${matchregex}/${settext}/" ${dest}
+		fi
+	elif [ "$prefix" == "-" ]; then
+		local result=$(tac ${dest} | sed "0,/${matchregex}/{s/${matchregex}//}" | tac)
+		echo "$result" > ${dest}
+	elif [ "$prefix" == "r" ]; then
+		sed -i -E "s/$matchregex//" ${dest}
+	else
+		logVerbose "unknown prefix for action ${action}"
+	fi
+}
+
+function insertInclude {
+	local dest="${1}"
+	local include="${INCLUDE}"
+	local prefix="${include:0:1}" # +/-
+	local includedBlock="${include:2}"
+
+	if [ "$prefix" == "+" ]; then
+		if [ -z "$includedBlock" ] || [ ! -f "${includedBlock}" ]; then
+			echo "error: invalid include block"
 			exit 1
 		fi
-		# write draft
-		echo "<!--#include:$template-->" >> ${1}
 	fi
+
+	performAction "include" "$include" "$dest"
+}
+
+function insertSet {
+	local dest="${1}"
+	local setline="${SETOPTION}"
+
+	performAction "set" "$setline" "$dest"
 }
 
 # user end
 
 function showHelp {
 	echo "xStatix"
-	echo "  syntax: xstatix [-s|-t|-v|-g|-h|-w|-e|-d|-p|-u]"
+	echo "  syntax: xstatix [-s|-i|-v|-g|-h|-w|-e|-d|-p|-u]"
 	echo "  options:"
-	echo "    s	set variable"
-	echo "    t	use specified block as template"
+	echo "    s	set variable <diff>"
+	echo "    i	include block <diff>"
 	echo "    v	verbose"
 	echo "    g	generate project tree"
 	echo "    h	print this help"
@@ -136,13 +195,13 @@ function showHelp {
 	echo "    u	unpublish"
 	echo "  default:"
 	echo "    generates default project file tree"
-	echo "  note:"
-	echo "    use the options in the order you want them!"
+	echo "  notes:"
+	echo "    - <diff>: +@ to add, -@ remove, r@ remove all, =@ set. (e.g: +@var=val)"
+	echo "    - use the options in the order you want them!"
 	exit 0
 }
 
 function makeProjectTree {
-	mkdir -p "$BLOCKSDIR"
 	mkdir -p "$ASSETDIR"
 	mkdir -p "$DRAFTSDIR"
 	rm -rf "${OUTDIR}"/*
@@ -181,9 +240,6 @@ function deleteDraft {
 }
 
 function publishPage {
-	SRCDIR="${DRAFTSDIR}"
-
-	#loadRoutes "${1}.html"
 	loadRoutes
 	generate
 
@@ -206,38 +262,9 @@ function unpublishPage {
 function editDraft {
 	local draft="${1}.html"
 	local dest=${DRAFTSDIR}${draft}
-	SRCDIR="$DRAFTSDIR"
 
-	# insert template block
-	insertInclude "${dest}"
-
-	# variable settings
-	# local choice=$(prerenderBlock "${draft}" | grep -Po "(.?@).*?(?=-->)")
-	local setline="${SETOPTION}"
-	local prefix="${setline:0:1}" # +/-
-	local rest="${setline:2}"
-	local varname="${rest%%=*}"
-	local varval="${rest#*=}"
-	local setText="<!--#set:${varname}=${varval}-->"
-	local matchRegex="<!--#set:${varname}=.*-->"
-
-	if [ "$prefix" == "+" ]; then
-		echo "$setText" >> ${dest}
-	elif [ "$prefix" == "=" ]; then
-		local match=$(grep "$matchRegex" ${dest})
-		if [ -z "$match" ]; then
-			echo "$setText" >> ${dest}
-		else
-			sed -i -E "s/${matchRegex}/${setText}/" ${dest}
-		fi
-	elif [ "$prefix" == "-" ]; then
-		local result=$(tac ${dest} | sed "0,/${matchRegex}/{s/${matchRegex}//}" | tac)
-		echo "$result" > ${dest}
-	elif [ "$prefix" == "r" ]; then
-		sed -i -E "s/$matchRegex//" ${dest}
-	else
-		logVerbose "unknown prefix"
-	fi
+	insertInclude "$dest"
+	insertSet "$dest"
 
 	echo "edit complete"
 	exit 0
@@ -246,10 +273,10 @@ function editDraft {
 # main
 # read options
 
-while getopts ":s:t:vghw:e:d:p:u:" opt; do
+while getopts ":s:i:vghw:e:d:p:u:" opt; do
 	case ${opt} in
-	s ) SETOPTION=${OPTARG} ;;
-	t ) TEMPLATE=${OPTARG} && logVerbose "using template ${OPTARG}" ;;
+	s ) SETOPTION=${OPTARG} && logVerbose "setting ${OPTARG}" ;;
+	i ) INCLUDE=${OPTARG} && logVerbose "including ${OPTARG}" ;;
 	v ) VERBOSE=true ;;
 	g ) makeProjectTree ;;
 	h ) showHelp ;;

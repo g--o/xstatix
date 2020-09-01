@@ -6,7 +6,7 @@ echo "====== clean ======="
 
 echo "====== demo ======="
 echo ">> create draft of the page block, set title"
-./xstatix -t index -w index
+./xstatix -i +@blocks/index.html -w index
 echo ">> add content (edit)"
 ./xstatix -s =@title="a title" -e index
 ./xstatix -s +@content="hello " -e index
