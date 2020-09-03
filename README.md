@@ -11,12 +11,13 @@ xstatix allows to write, edit and publish drafts. you can generate instructions 
 e.g: set a var in a draft (edit)
 `./xstatix.sh -s =@var=val -e draft`
 
-for more info: `./xstatix.sh -h`
+for more info: `./xstatix.sh -h` and check out the examples directory.
 
-## creating scripts and blocks - statix directives
+## creating blocks - updated statix directives
 
-the statix directives remain:
 - Include directive `<!--#include:other-template.html-->` allows including another block to reuse existing (HTML) code.
 - Set directive `<!--#set:variable=some new value-->` allows setting a variable to the specific string value.
-- Use directive `<!--@variable-->` inserts a previously set variable value.
-- [XSTATIX ONLY] Use-Append directive `<!--+@variable-->` prepends previously set variable; i.e: acts like a Use directive but keeps itself.
+- Use directive: a bit different from <diff> convention the directives are:
+	- `<!--=@variable-->` to insert a previously set variable value
+	- `<!---@variable-->` to prepend previously set variable
+	- `<!--+@variable-->` to append previously set variable

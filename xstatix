@@ -54,7 +54,8 @@ function renderBlock {
 		local setval="${set#*=}"
 
 		blockText="${blockText//$L/}"
-		blockText="${blockText//<!--@${setvar}-->/${setval}}"
+		blockText="${blockText//<!--=@${setvar}-->/${setval}}"
+		blockText="${blockText//<!---@${setvar}-->/<!---@${setvar}-->${setval}}"
 		blockText="${blockText//<!--+@${setvar}-->/${setval}<!--+@${setvar}-->}"
 	done
 	IFS="$OLDIFS"
@@ -106,7 +107,7 @@ function performAction {
 	local action="${2}"
 	local dest="${3}"
 	# parse
-	local prefix="${action:0:1}" # +/-
+	local prefix="${action:0:1}" # +/-/=
 	local rest="${action:2}"
 	local varname="${rest%%=*}"
 	local varval="${rest#*=}"
@@ -196,7 +197,7 @@ function showHelp {
 	echo "  default:"
 	echo "    generates default project file tree"
 	echo "  notes:"
-	echo "    - <diff>: +@ to add, -@ remove, r@ remove all, =@ set. (e.g: +@var=val)"
+	echo "    - <diff>: =@ set, +@ to add, -@ remove, r@ remove all. (e.g: +@var=val)"
 	echo "    - use the options in the order you want them!"
 	exit 0
 }
@@ -242,6 +243,10 @@ function deleteDraft {
 function publishPage {
 	loadRoutes
 	generate
+
+	if [[ "$ASSETDIR" ]]; then 
+		cp -rd "${ASSETDIR}/." "${OUTDIR}/"
+	fi
 
 	echo "published draft ${1}"
 	exit 0
